@@ -9,7 +9,9 @@ const jwt = require("express-jwt")
 const compression = require('compression')
 const cors = require("cors")
 const fs = require("fs")
-const schedule = require('node-schedule')
+const { WebhookClient } = require('dialogflow-fulfillment');
+const { verifyOtp, updateMember, checkMemberByMobileNo } = require("./api/member/function/member")
+
 app.use(compression())
 app.use(
     morgan(
@@ -55,27 +57,63 @@ app.use(
             return null;
         }
     }).unless({
-        path: ["/auth/login_online_bp", "/auth/login_member", "/auth/login_pos_bp",
-            "/auth/test", "/auth/check_member", "/auth/check_online_bp", "/auth/check_pos_bp",
-            "/auth/login_bp_user", "/auth/login_bo_user", "/member/checkMemberID",
-            "/member/checkMemberMobile", "/online_bp/checkMemberID", "/online_bp/checkOnlineBPMobile",
-            "/pos_bp/checkPosBPMobile", "/pos_bp/checkPosBPID", "/auth/check_company_pos",
-            "/auth/check_company_member", "/auth/check_company_online",
-            "/member/checkMemberMobileID", "/member/checkMemberMailPassword", "/member/checkMemberMail", "/member/checkMember",
-            "/pos_bp/checkPosBPMobileID", "/pos_bp/checkPosBPMail", "/pos_bp/checkPosBPMailPassword", "/pos_bp/checkPosBP",
-            "/online_bp/checkOnlineBPMobileID", "/online_bp/checkOnlineBPMail", "/online_bp/checkOnlineBPMailPassword", "/online_bp/checkOnlineBP",
-            "/bo_user/createBo_user", "/bp_user/createBp_user", "/member/createMember", "/online_bp/createOnline_bp", "/pos_bp/createPos_bp",
-            "/get_data/getBank", "/get_data/getPosGroup", "/get_data/getBusinessType", "/get_data/getCareer", "/get_data/getCompanyType",
-            "/auth/resetPasswordPos", "/auth/resetPasswordOnline", "/auth/resetPasswordMember"
-        ]
+        path: ["/member/InsertProfile", "/member/createMember", "/member/webhook", "/member/fulfillment", "/fulfillment"]
     })
 )
 app.get("/", function (req, res, next) {
     res.send(`listening port ${port}`)
 })
+
 app.use(require('./router'))
-const job = schedule.scheduleJob('0 59 23 * *', function (fireDate) {
-    console.log('reset block')
-    // func.resetBlock()
-    // func.resetCount()
-})
+
+async function handleFulfillment(agent) {
+    const userId = agent.originalRequest.payload.data.source.userId;
+    const { mobile, ref, otp } = agent.parameters;
+    const doc = {
+        uid: userId,
+        mobile,
+        ref,
+        otp
+    };
+    let status_otp = await verifyOtp(doc)
+    if (status_otp) {
+        await updateMember(userId, mobile)
+        agent.add('รหัส OTP ถูกต้อง ยืนยันตัวตนสำเร็จ');
+    } else {
+        // console.log('userId',userId)
+        // await updateMember(userId, mobile)
+        agent.add('รหัส OTP ไม่ถูกต้อง');
+    }
+}
+async function handleFulfillmentMobile(agent) {
+    const userId = agent.originalRequest.payload.data.source.userId;
+    const { mobile, ref } = agent.parameters;
+    const doc = {
+        uid: userId,
+        mobile,
+        ref,
+    };
+    let newMember = await checkMemberByMobileNo(doc.mobile)
+
+    if (!newMember) {
+        agent.add(`กรุณากรอกรหัส OTP ที่ได้รับทาง SMS (#Ref: ${ref})`);
+    } else {
+        agent.add('ไม่มีหมายเลขนี้อยู่ในระบบ');
+    }
+}
+// function handlerOne(agent) {
+//     agent.add(`This is handler one`);
+// }
+
+// function handlerThree(agent) {
+//     agent.add(`This is handler three`);
+// }
+app.post('/fulfillment', (request, response) => {
+    const agent = new WebhookClient({ request, response });
+    let intentMap = new Map();
+    intentMap.set('register - mobile', handleFulfillmentMobile);
+    intentMap.set('register - otpverify', handleFulfillment);
+    agent.handleRequest(intentMap);
+});
+
+
